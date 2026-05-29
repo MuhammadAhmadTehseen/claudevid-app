@@ -34,6 +34,7 @@ app.use('/jobs', express.static(jobsDir));
 app.use('/', require('./routes/render'));
 app.use('/', require('./routes/status'));
 app.use('/', require('./routes/files'));
+app.use('/', require('./routes/upload'));
 
 // ── 404 handler ───────────────────────────────────────────────────────────────
 app.use((req, res) => {

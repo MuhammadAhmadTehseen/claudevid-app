@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
-import { getStatus, submitEdit, StatusResponse } from '@/lib/api'
+import { getStatus, submitEdit, retryJob, StatusResponse } from '@/lib/api'
 import ProgressBar from '@/components/ProgressBar'
 import StatusBadge from '@/components/StatusBadge'
 
@@ -24,6 +24,7 @@ export default function EditPage({ params }: { params: { jobId: string } }) {
   const [status, setStatus] = useState<StatusResponse | null>(null)
   const [editPrompt, setEditPrompt] = useState('')
   const [editLoading, setEditLoading] = useState(false)
+  const [resumeLoading, setResumeLoading] = useState(false)
   const [copied, setCopied] = useState(false)
   const editTextareaRef = useRef<HTMLTextAreaElement>(null)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -65,6 +66,19 @@ export default function EditPage({ params }: { params: { jobId: string } }) {
     } catch (err) {
       console.error('Edit failed:', err)
       setEditLoading(false)
+    }
+  }
+
+  const handleResume = async () => {
+    if (resumeLoading) return
+    setResumeLoading(true)
+    try {
+      const { jobId: resumedJobId } = await retryJob(jobId)
+      // Redirect to the same (or new) job page to watch the resumed pipeline
+      router.push(`/edit/${resumedJobId}`)
+    } catch (err) {
+      console.error('Resume failed:', err)
+      setResumeLoading(false)
     }
   }
 
@@ -157,13 +171,58 @@ export default function EditPage({ params }: { params: { jobId: string } }) {
             <p className="text-sm text-[#CCCCCC] mb-4">
               {status?.error || 'An unknown error occurred.'}
             </p>
-            <button
-              onClick={() => router.push('/')}
-              className="px-4 py-2 rounded-[6px] text-sm font-bold text-black"
-              style={{ background: '#FF6200' }}
-            >
-              Try Again
-            </button>
+            <div className="flex gap-3">
+              {/* Primary: resume from where it failed */}
+              <button
+                onClick={handleResume}
+                disabled={resumeLoading}
+                className="flex-1 px-4 py-2 rounded-[6px] text-sm font-bold text-black flex items-center justify-center gap-2 transition-opacity"
+                style={{
+                  background: '#FF6200',
+                  opacity: resumeLoading ? 0.6 : 1,
+                  cursor: resumeLoading ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {resumeLoading ? (
+                  <>
+                    <svg
+                      className="spinner"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                    >
+                      <circle
+                        cx="8"
+                        cy="8"
+                        r="6"
+                        stroke="black"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeDasharray="28"
+                        strokeDashoffset="10"
+                      />
+                    </svg>
+                    Resuming...
+                  </>
+                ) : (
+                  `Resume from ${status?.resumeFrom ?? 'last stage'}`
+                )}
+              </button>
+
+              {/* Secondary: start completely fresh */}
+              <button
+                onClick={() => router.push('/')}
+                className="flex-1 px-4 py-2 rounded-[6px] text-sm font-bold transition-colors"
+                style={{
+                  background: 'rgba(255,255,255,0.06)',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  color: '#CCCCCC',
+                }}
+              >
+                Start Over
+              </button>
+            </div>
           </div>
         )}
 

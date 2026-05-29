@@ -8,6 +8,9 @@ const jobQueue = require('../queue/jobQueue');
 /**
  * GET /status/:jobId
  * Returns current status of a job.
+ *
+ * When status is 'error', includes a `resumeFrom` field indicating
+ * the first pipeline stage whose output file is missing.
  */
 router.get('/status/:jobId', (req, res) => {
   const { jobId } = req.params;
@@ -17,7 +20,7 @@ router.get('/status/:jobId', (req, res) => {
     return res.status(404).json({ error: `Job ${jobId} not found` });
   }
 
-  return res.json({
+  const response = {
     jobId: job.jobId,
     status: job.status,
     progress: job.progress || 0,
@@ -28,7 +31,14 @@ router.get('/status/:jobId', (req, res) => {
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
     ...(job.parentJobId ? { parentJobId: job.parentJobId } : {})
-  });
+  };
+
+  // When the job has errored, tell the client where it can resume from
+  if (job.status === 'error' && job.jobDir) {
+    response.resumeFrom = jobQueue.getResumeStage(job.jobDir);
+  }
+
+  return res.json(response);
 });
 
 /**

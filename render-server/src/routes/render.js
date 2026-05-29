@@ -199,4 +199,50 @@ async function processEditJob(jobId, parentJob, editPrompt) {
   logger.job(jobId, `Edit job complete. URL: ${videoUrl || downloadUrl}`);
 }
 
+/**
+ * POST /retry/:jobId
+ * Resume a failed job from the last successful stage.
+ *
+ * Checks which output files already exist in jobs/{jobId}/ and skips
+ * those stages, resuming from the first stage whose output is missing.
+ *
+ * Response: { jobId, resumeFrom, status: 'queued' }
+ */
+router.post('/retry/:jobId', async (req, res) => {
+  const { jobId } = req.params;
+
+  const job = jobQueue.getJob(jobId);
+  if (!job) {
+    return res.status(404).json({ error: `Job ${jobId} not found` });
+  }
+
+  if (job.status !== 'error') {
+    return res.status(400).json({ error: `Job is not in error state (current status: ${job.status})` });
+  }
+
+  // Determine which stage to resume from based on existing output files
+  const resumeFrom = jobQueue.getResumeStage(job.jobDir);
+
+  // Reset job to queued state
+  jobQueue.updateJob(jobId, {
+    status: 'queued',
+    error: null,
+    progress: 0,
+    step: `Resuming from stage: ${resumeFrom}`
+  });
+
+  logger.info(`Retry requested for job ${jobId} — resuming from stage: ${resumeFrom}`);
+
+  // Kick off the resume pipeline asynchronously
+  jobQueue.resumeJob(jobId, resumeFrom).catch((err) => {
+    logger.error(`resumeJob ${jobId} uncaught: ${err.message}`);
+  });
+
+  return res.status(202).json({
+    jobId,
+    resumeFrom,
+    status: 'queued'
+  });
+});
+
 module.exports = router;
