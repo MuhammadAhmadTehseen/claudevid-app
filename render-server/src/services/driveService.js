@@ -15,55 +15,93 @@ const logger = require('../utils/logger');
  * @param {string} destPath - Local filesystem path to save the file
  */
 async function downloadFromDrive(fileId, destPath) {
-  const baseUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`;
-
   logger.info(`Downloading Drive file ${fileId} → ${destPath}`);
 
-  // First request — may redirect to confirmation page for large files
-  const response = await axios.get(baseUrl, {
-    responseType: 'stream',
-    maxRedirects: 5,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; ClaudeVid/1.0)'
-    },
-    validateStatus: (status) => status < 400
-  });
+  // Google changed download URLs in 2024. Try modern endpoint first, then fallbacks.
+  const candidates = [
+    `https://drive.usercontent.google.com/download?id=${fileId}&export=download&authuser=0&confirm=t`,
+    `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`,
+    `https://drive.google.com/uc?id=${fileId}&export=download`,
+  ];
 
-  // Check if we got HTML instead of a binary file (Google's virus-scan warning page)
-  const contentType = response.headers['content-type'] || '';
-  if (contentType.includes('text/html')) {
-    // Extract the confirm token from the response HTML and retry
-    let html = '';
-    for await (const chunk of response.data) {
-      html += chunk.toString();
-      if (html.length > 50000) break; // don't consume the whole stream
-    }
+  const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
-    const confirmMatch = html.match(/confirm=([0-9A-Za-z_\-]+)/);
-    if (!confirmMatch) {
-      throw new Error(`Drive returned HTML for file ${fileId}. File may be private or require auth.`);
-    }
+  for (const url of candidates) {
+    try {
+      logger.info(`Trying: ${url}`);
+      const response = await axios.get(url, {
+        responseType: 'stream',
+        maxRedirects: 10,
+        headers: { 'User-Agent': userAgent },
+        validateStatus: (s) => s < 400,
+      });
 
-    const confirmToken = confirmMatch[1];
-    const confirmUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=${confirmToken}`;
+      const contentType = response.headers['content-type'] || '';
 
-    logger.info(`Large file — retrying with confirm token`);
-
-    const confirmResponse = await axios.get(confirmUrl, {
-      responseType: 'stream',
-      maxRedirects: 5,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; ClaudeVid/1.0)'
+      // Got a binary/video stream — write it directly
+      if (!contentType.includes('text/html')) {
+        await streamToFile(response.data, destPath);
+        break;
       }
-    });
 
-    await streamToFile(confirmResponse.data, destPath);
-  } else {
-    await streamToFile(response.data, destPath);
+      // Got HTML — parse it for a confirm token and retry once
+      logger.info(`Got HTML response — attempting confirm token extraction`);
+      let html = '';
+      for await (const chunk of response.data) {
+        html += chunk.toString();
+        if (html.length > 100000) break;
+      }
+
+      // Match both legacy ?confirm=XXX and modern UUID formats
+      const tokenPatterns = [
+        /[?&]confirm=([^&"'\s<>]+)/,
+        /"confirm"\s*:\s*"([^"]+)"/,
+        /confirm=([A-Za-z0-9_\-]{4,})/,
+      ];
+
+      let confirmToken = null;
+      for (const pattern of tokenPatterns) {
+        const m = html.match(pattern);
+        if (m && m[1] !== 't') { confirmToken = m[1]; break; }
+      }
+
+      if (confirmToken) {
+        logger.info(`Retrying with confirm token: ${confirmToken}`);
+        const retryUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&authuser=0&confirm=${confirmToken}`;
+        const retryRes = await axios.get(retryUrl, {
+          responseType: 'stream',
+          maxRedirects: 10,
+          headers: { 'User-Agent': userAgent },
+        });
+        await streamToFile(retryRes.data, destPath);
+        break;
+      }
+
+      logger.warn(`Could not extract confirm token from HTML — trying next URL`);
+
+    } catch (err) {
+      logger.warn(`Attempt failed (${url}): ${err.message}`);
+    }
+  }
+
+  // Validate the download
+  if (!fs.existsSync(destPath)) {
+    throw new Error(
+      `Failed to download Drive file ${fileId}. ` +
+      `Ensure the file is shared as "Anyone with the link can view" (not just editor).`
+    );
   }
 
   const stat = fs.statSync(destPath);
-  logger.info(`Downloaded ${(stat.size / 1024 / 1024).toFixed(2)} MB to ${destPath}`);
+  if (stat.size < 10000) {
+    fs.unlinkSync(destPath);
+    throw new Error(
+      `Downloaded file is only ${stat.size} bytes — likely an HTML error page. ` +
+      `Check that the file sharing is set to "Anyone with the link".`
+    );
+  }
+
+  logger.info(`Downloaded ${(stat.size / 1024 / 1024).toFixed(2)} MB → ${destPath}`);
   return destPath;
 }
 
