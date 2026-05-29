@@ -1,0 +1,6 @@
+node_modules/
+jobs/
+.env
+google-service-account.json
+*.mp4
+*.mp3
