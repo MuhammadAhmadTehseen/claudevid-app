@@ -1,8 +1,5 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
-  "framework": "nextjs",
-  "env": {
-    "NEXT_PUBLIC_RENDER_SERVER_URL": "@render_server_url"
-  }
+  "framework": "nextjs"
 }
