@@ -51,7 +51,7 @@ async function transcribe(videoPath) {
 
   const transcript = await client.transcripts.transcribe({
     audio: audioPath,
-    speech_model: 'universal-2',
+    speech_models: ['universal-2'],
     word_boost: ['n8n', 'Claude', 'Apify', 'LinkedIn', 'automation', 'Soch', 'workflow', 'webhook'],
     format_text: true
   });
